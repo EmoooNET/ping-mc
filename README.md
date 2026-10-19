@@ -2,7 +2,7 @@
 
 用于查询 Minecraft Java Edition 服务器的 Node.js 库。源码使用 TypeScript，发布为 ESM，附带自动生成的 `.d.ts`、声明映射及源码映射，无运行时依赖。
 
-支持 Java Edition 1.7+ 的 TCP Server List Ping；不包含 Bedrock、旧版 Legacy Ping 或 DNS SRV 自动发现。`host` 传入主机名或 IP，`port` 是实际连接端口。运行环境为 Node.js 22+。
+支持 Java Edition 1.7+ 的 TCP Server List Ping 和 DNS SRV 自动发现；不包含 Bedrock 或旧版 Legacy Ping。`host` 传入主机名或 IP；省略 `port` 时，域名自动查询 Minecraft SRV 记录，显式传入端口则直接连接。运行环境为 Node.js 22+。
 
 ## 构建和本地安装
 
@@ -12,10 +12,10 @@ pnpm test
 pnpm pack
 ```
 
-`pnpm pack` 会先构建，再生成 `pingmc-1.0.0.tgz`。在需要使用此库的项目中安装这个文件：
+`pnpm pack` 会先构建，再生成 `ping-mc-1.0.0.tgz`。在需要使用此库的项目中安装这个文件：
 
 ```sh
-pnpm add /path/to/pingmc-1.0.0.tgz
+pnpm add /path/to/ping-mc-1.0.0.tgz
 ```
 
 库入口为 `dist/index.js`，类型入口为 `dist/index.d.ts`。导入库不会自动联网或执行示例程序。此项目已配置打包入口，尚未发布到 npm。
@@ -23,7 +23,7 @@ pnpm add /path/to/pingmc-1.0.0.tgz
 ## 使用实例
 
 ```ts
-import { MCServerConnect, MCServerError } from 'pingmc';
+import { MCServerConnect, MCServerError } from 'ping-mc';
 
 const server = new MCServerConnect('localhost', '25565', {
   timeout: 5000,
@@ -67,7 +67,7 @@ const latency = await server.ping();                // number，毫秒
 不需要持有实例时，可以直接调用导出的函数：
 
 ```ts
-import { queryStatus, queryStatusWithPing, pingServer, parseMOTD } from 'pingmc';
+import { queryStatus, queryStatusWithPing, pingServer, parseMOTD } from 'ping-mc';
 
 const status = await queryStatus('localhost', 25565);
 const statusWithPing = await queryStatusWithPing('localhost', '25565', { timeout: 3000 });
@@ -89,12 +89,31 @@ pingServer(host: string, port?: number | string, options?: MCServerOptions): Pro
 parseMOTD(description: MCChatComponent): string
 ```
 
-`port` 默认 `25565`，接受 `1–65535` 的整数或仅包含十进制数字的字符串（例如 `'25565'`）。`host` 不接受 URL、空字符串或空白字符；IPv6 地址使用不带方括号的形式，例如 `::1`。
+`port` 接受 `1–65535` 的整数或仅包含十进制数字的字符串（例如 `'25565'`）。省略端口时默认值为 `25565`，域名会先尝试 SRV 解析；IPv4 / IPv6 地址直接连接。显式端口（包括 `25565` 或 `'25565'`）会跳过 SRV。`host` 不接受 URL、空字符串或空白字符；IPv6 地址使用不带方括号的形式，例如 `::1`。
+
+### 自动 SRV 解析
+
+```ts
+// 自动查询 _minecraft._tcp.play.example.com，并连接记录中的主机与端口。
+const server = new MCServerConnect('mc.example.com');
+
+// 已知实际地址时可直接连接；这两种写法查询的是同一个服务。
+const directServer = new MCServerConnect('100.100.100.100', 25566);
+
+// 自动解析时如需配置选项，将第二个参数设为 undefined；函数式 API 同样适用。
+const configuredServer = new MCServerConnect('mc.example.com', undefined, { timeout: 3000 });
+```
+
+SRV 解析在每次请求时执行，构造实例不会联网。没有 SRV 记录（`ENODATA`、`ENOTFOUND` 或空结果）时，回退到原始域名和 `25565`；其他 DNS 错误通过 `NETWORK_ERROR` 返回。记录的目标为 `.` 表示服务不可用，也会报告 `NETWORK_ERROR`。
+
+多个记录优先选择数值最小的 `priority`，同级按 `weight` 随机选择；同级权重全为零时等概率选择。本次查询只连接选中的一个目标，不自动重试其他记录。解析与 TCP、状态获取、Ping 共用同一个总超时，超时会取消当前请求的 SRV 解析。
+
+SRV 只改变 TCP 连接目标；Minecraft 握手保留原始域名和端口，供代理进行虚拟主机路由。实例的只读 `host` / `port` 也保留输入值（省略端口时为 `25565`）。同一服务的版本、MOTD、图标等状态应一致，在线人数和延迟可能随查询时间变化。
 
 | 实例方法 / 属性 | 返回类型 | 用途 |
 | --- | --- | --- |
-| `host` | `string`（只读） | 服务器主机名或 IP |
-| `port` | `number`（只读） | 转换后的端口 |
+| `host` | `string`（只读） | 传入的服务器主机名或 IP |
+| `port` | `number`（只读） | 传入端口的数值；省略时为 `25565`，不随 SRV 结果改变 |
 | `getStatus()` | `Promise<MCServerStatus>` | 获取完整状态，不发送 Ping |
 | `getStatusWithPing()` | `Promise<MCServerStatusWithPing>` | 同一连接获取状态和延迟 |
 | `getVersion()` | `Promise<MCServerVersion>` | 版本名与协议版本 |
@@ -106,7 +125,7 @@ parseMOTD(description: MCChatComponent): string
 
 ### 配置与返回值
 
-以下接口均可通过 `import type { ... } from 'pingmc'` 导入。
+以下接口均可通过 `import type { ... } from 'ping-mc'` 导入。
 
 ```ts
 interface MCServerOptions {
@@ -171,7 +190,7 @@ interface MCServerStatusWithPing extends MCServerStatus {
 pnpm build          # 生成 ESM、.d.ts 及映射文件
 pnpm typecheck      # 仅检查源码类型
 pnpm test           # 构建、验证公开类型、运行本地 TCP 模拟服务器测试
-pnpm start localhost 25565
+pnpm start          # 运行 examples/query.mjs 中配置的真实服务器查询
 ```
 
 测试使用本地模拟服务器，不依赖公网 Minecraft 服务器。协议参考：[Minecraft Java Edition Server List Ping](https://minecraft.wiki/w/Java_Edition_protocol/Server_List_Ping)。
@@ -183,6 +202,7 @@ src/
   types.ts            配置及返回值接口
   errors.ts           可识别的错误类型
   options.ts          参数验证
+  srv.ts              SRV 自动发现、优先级与权重选择
   transport.ts        TCP 生命周期、超时和 Ping/Pong
   status.ts           响应结构验证与字段转换
   motd.ts             纯文本 MOTD 解析

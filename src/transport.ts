@@ -13,6 +13,7 @@ import {
   decodeStatusResponse,
 } from './protocol/packets.js';
 import { parseStatus } from './status.js';
+import { resolveServerAddress } from './srv.js';
 import type { MCServerStatus, MCServerStatusWithPing } from './types.js';
 
 export function requestStatus(options: ConnectionOptions, withPing: false): Promise<MCServerStatus>;
@@ -24,6 +25,7 @@ export function requestStatus(
   return new Promise((resolve, reject) => {
     const socket = new Socket();
     const decoder = new PacketDecoder();
+    const controller = new AbortController();
     let settled = false;
     let status: MCServerStatus | undefined;
     let pingToken = 0n;
@@ -38,6 +40,7 @@ export function requestStatus(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      controller.abort();
       socket.destroy();
       if (error) reject(error);
       else resolve(result!);
@@ -50,6 +53,7 @@ export function requestStatus(
     socket.once('connect', () => {
       if (settled) return;
       socket.setNoDelay(true);
+      // 握手保留原始域名与端口，供代理识别虚拟主机；SRV 只改变 TCP 连接目标。
       socket.write(Buffer.concat([
         createHandshake(options.host, options.port, options.protocolVersion),
         createStatusRequest(),
@@ -96,10 +100,21 @@ export function requestStatus(
       fail(new MCServerError('CONNECTION_CLOSED', 'Connection closed before the response was complete'));
     });
 
-    try {
-      socket.connect({ host: options.host, port: options.port });
-    } catch (cause) {
-      fail(new MCServerError('NETWORK_ERROR', 'Could not open the server connection', { cause }));
+    async function connect(): Promise<void> {
+      try {
+        const address = await resolveServerAddress(options, controller.signal);
+        // 超时后即使 DNS 才返回，也不能重新建立连接。
+        if (settled) return;
+        socket.connect(address);
+      } catch (cause) {
+        if (cause instanceof MCServerError) {
+          fail(cause);
+          return;
+        }
+        fail(new MCServerError('NETWORK_ERROR', 'Could not open the server connection', { cause }));
+      }
     }
+
+    void connect();
   });
 }

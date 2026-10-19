@@ -7,7 +7,8 @@ import type { MCServerOptions, MCServerStatus, MCServerStatusWithPing, MCServerV
 export class MCServerConnect {
   readonly #options: ConnectionOptions;
 
-  constructor(host: string, port: number | string = 25565, options: MCServerOptions = {}) {
+  /** 省略端口时自动查询 SRV；显式端口（包括 25565）始终直接连接。 */
+  constructor(host: string, port?: number | string, options: MCServerOptions = {}) {
     this.#options = normalizeOptions(host, port, options);
   }
 
@@ -59,7 +60,7 @@ export class MCServerConnect {
 /** 无需持有实例，直接获取最新状态。 */
 export async function queryStatus(
   host: string,
-  port: number | string = 25565,
+  port?: number | string,
   options: MCServerOptions = {},
 ): Promise<MCServerStatus> {
   return new MCServerConnect(host, port, options).getStatus();
@@ -68,7 +69,7 @@ export async function queryStatus(
 /** 一次连接获取最新状态及 Ping 延迟。 */
 export async function queryStatusWithPing(
   host: string,
-  port: number | string = 25565,
+  port?: number | string,
   options: MCServerOptions = {},
 ): Promise<MCServerStatusWithPing> {
   return new MCServerConnect(host, port, options).getStatusWithPing();
@@ -77,7 +78,7 @@ export async function queryStatusWithPing(
 /** 通过 0x01 Ping/Pong 测量往返时间（毫秒）。 */
 export async function pingServer(
   host: string,
-  port: number | string = 25565,
+  port?: number | string,
   options: MCServerOptions = {},
 ): Promise<number> {
   return new MCServerConnect(host, port, options).ping();
